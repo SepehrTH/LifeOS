@@ -1,0 +1,42 @@
+# dependencies
+node_modules
+.pnp
+.pnp.js
+
+# build output
+.next
+out
+build
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets — AUTH_SECRET and the Google client secret live here
+.env
+.env.local
+.env*.local
+.env.production
+
+# your data: the database, its WAL sidecars, and the nightly snapshots
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/backups
+
+# server + backup logs
+logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# working notes, not part of the app
+CODEBASE.md
+
+# editors and OS cruft
+.DS_Store
+.idea
+.vscode
+*.swp
+
+# deploy tooling, should it ever be used
+.vercel
