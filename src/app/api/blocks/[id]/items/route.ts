@@ -17,6 +17,7 @@ export async function POST(req: Request, { params }: Ctx) {
     recurring: body.recurring === true,
     milestone: body.milestone === true,
     dueAt: typeof body.dueAt === "string" ? body.dueAt.slice(0, 10) : "",
+    parentId: typeof body.parentId === "string" ? body.parentId : "",
   });
   if (!item) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json({ item });

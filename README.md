@@ -190,6 +190,10 @@ before its name, and carried by any of its todos that you send to the Todo tab.
 
 - **Left rail**: every todo in the project, wherever it was created. Click the text to
   rename it, drag the grip on the left to reorder, star one (`☆`) to make it a *milestone*.
+  Right-click → *Add sub-todo* nests todos one level under a parent: ticking the parent ticks
+  its sub-todos (and unticking clears them), deleting it deletes them, and finishing a
+  sub-todo leaves the parent alone. Nesting stops at one level — a sub-todo of a sub-todo
+  attaches to the same parent.
   Milestones sort into their own section at the top. Drag the divider to resize the rail; the
   width is remembered.
 - **Progress**, under the top bar, has two modes. *Manual* — drag the bar to whatever

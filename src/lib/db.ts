@@ -180,8 +180,11 @@ function migrate(db: Database.Database) {
   addColumn(db, "items", "due_at", "TEXT NOT NULL DEFAULT ''");
   // A todo-box copy of a project todo points back at the original through link_id.
   addColumn(db, "items", "link_id", "TEXT NOT NULL DEFAULT ''");
+  // Sub-todos: a child points at its parent, and lives in the same block.
+  addColumn(db, "items", "parent_id", "TEXT NOT NULL DEFAULT ''");
   db.exec("CREATE INDEX IF NOT EXISTS items_due ON items(due_at)");
   db.exec("CREATE INDEX IF NOT EXISTS items_link ON items(link_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS items_parent ON items(parent_id)");
 }
 
 /** Projects created before colours existed get one, in the order they were made. */

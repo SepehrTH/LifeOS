@@ -22,6 +22,8 @@ export type Item = {
   sent: boolean;
   /** Optional deadline as a local YYYY-MM-DD string; empty when there is none. */
   dueAt: string;
+  /** Set on a sub-todo: the todo it sits under. Children live in the same block. */
+  parentId: string;
 };
 
 export type BlockKind = "daily" | "general" | "project" | "text" | "deadlines";
@@ -77,6 +79,7 @@ type ItemRow = {
   milestone: number;
   link_id: string;
   due_at: string;
+  parent_id: string;
   origin_project: string | null;
   origin_title: string | null;
   origin_color: string | null;
@@ -101,6 +104,7 @@ const BLOCK_COLUMNS = `id, tab, kind, title, description, content, x, y, w, h, z
  */
 const ITEM_QUERY = `
   SELECT i.id, i.text, i.done, i.position, i.recurring, i.milestone, i.link_id, i.due_at,
+         i.parent_id,
          p.id AS origin_project, p.title AS origin_title, p.color AS origin_color,
          src.milestone AS origin_milestone,
          (SELECT COUNT(*) FROM items c WHERE c.link_id = i.id) AS copies
@@ -129,6 +133,7 @@ function toItem(row: ItemRow): Item {
       : null,
     sent: row.copies > 0,
     dueAt: row.due_at ?? "",
+    parentId: row.parent_id ?? "",
   };
 }
 
@@ -370,7 +375,7 @@ export function addItem(
   userId: string,
   blockId: string,
   text: string,
-  flags: { recurring?: boolean; milestone?: boolean; dueAt?: string } = {}
+  flags: { recurring?: boolean; milestone?: boolean; dueAt?: string; parentId?: string } = {}
 ): Item | null {
   const owns = db
     .prepare("SELECT id, tab FROM blocks WHERE user_id = ? AND id = ?")
@@ -393,10 +398,19 @@ export function addItem(
     .prepare("SELECT COALESCE(MAX(position), 0) AS p FROM items WHERE block_id = ?")
     .get(blockId) as { p: number };
 
+  // Only a todo in the same block can be a parent, and nesting stops at one level.
+  let parentId = "";
+  if (flags.parentId) {
+    const parent = db
+      .prepare("SELECT id, parent_id FROM items WHERE id = ? AND block_id = ?")
+      .get(flags.parentId, blockId) as { id: string; parent_id: string } | undefined;
+    if (parent) parentId = parent.parent_id || parent.id;
+  }
+
   const id = uid();
   db.prepare(
-    `INSERT INTO items (id, block_id, text, position, recurring, milestone, due_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO items (id, block_id, text, position, recurring, milestone, due_at, parent_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     blockId,
@@ -404,7 +418,8 @@ export function addItem(
     next.p + 1,
     flags.recurring ? 1 : 0,
     flags.milestone ? 1 : 0,
-    flags.dueAt ?? ""
+    flags.dueAt ?? "",
+    parentId
   );
   recordEvent(id, "created");
 
@@ -419,6 +434,7 @@ export function addItem(
     origin: null,
     sent: false,
     dueAt: flags.dueAt ?? "",
+    parentId,
   };
 }
 
@@ -536,9 +552,27 @@ export function updateItem(
   values.push(itemId);
   db.prepare(`UPDATE items SET ${sets.join(", ")} WHERE id = ?`).run(...(values as never[]));
 
-  if (patch.done !== undefined) recordEvent(itemId, patch.done ? "completed" : "uncompleted");
+  if (patch.done !== undefined) {
+    recordEvent(itemId, patch.done ? "completed" : "uncompleted");
+    setChildrenDone(itemId, patch.done);
+  }
   syncLinked(itemId, patch);
   return true;
+}
+
+/** A parent's tick carries its sub-todos with it, in both directions. */
+function setChildrenDone(parentId: string, done: boolean) {
+  const children = db
+    .prepare("SELECT id FROM items WHERE parent_id = ? AND done != ?")
+    .all(parentId, done ? 1 : 0) as { id: string }[];
+
+  const mark = db.prepare("UPDATE items SET done = ?, completed_at = ? WHERE id = ?");
+  const stamp = done ? new Date().toISOString() : "";
+  for (const child of children) {
+    mark.run(done ? 1 : 0, stamp, child.id);
+    recordEvent(child.id, done ? "completed" : "uncompleted");
+    syncLinked(child.id, { done });
+  }
 }
 
 /** Mirrors a tick or a text edit onto the original todo and its other copies. */
@@ -568,7 +602,14 @@ function syncLinked(itemId: string, patch: { text?: string; done?: boolean }) {
 export function deleteItem(userId: string, itemId: string): boolean {
   if (!ownsItem(userId, itemId)) return false;
   recordEvent(itemId, "deleted");
-  // Deleting the original takes its copies with it; deleting a copy leaves the original.
+  // Sub-todos go with their parent, and copies go with their original.
+  const children = db.prepare("SELECT id FROM items WHERE parent_id = ?").all(itemId) as {
+    id: string;
+  }[];
+  for (const child of children) {
+    recordEvent(child.id, "deleted");
+    db.prepare("DELETE FROM items WHERE id = ? OR link_id = ?").run(child.id, child.id);
+  }
   db.prepare("DELETE FROM items WHERE id = ? OR link_id = ?").run(itemId, itemId);
   return true;
 }

@@ -34,6 +34,7 @@ export default function ProjectWorkspace({ initial }: { initial: Block }) {
   const [pane, setPane] = useState<"notes" | "map">("notes");
   // Bumped whenever the rail changes something the map should re-read.
   const [mapKey, setMapKey] = useState(0);
+  const [addingUnder, setAddingUnder] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOrder, setDragOrder] = useState<string[] | null>(null);
   const [menu, setMenu] = useState<MenuState>(null);
@@ -47,6 +48,15 @@ export default function ProjectWorkspace({ initial }: { initial: Block }) {
     const at = { x: e.clientX, y: e.clientY };
 
     const base: MenuEntry[] = [
+      ...(item.parentId
+        ? []
+        : [
+            {
+              type: "item" as const,
+              label: "Add sub-todo",
+              onSelect: () => setAddingUnder(item.id),
+            },
+          ]),
       {
         type: "item",
         label: item.dueAt ? "Change deadline…" : "Set deadline…",
@@ -114,8 +124,10 @@ export default function ProjectWorkspace({ initial }: { initial: Block }) {
   }
 
   /* Rail edits can change what the map shows, so nudge it after each one. */
-  const railPatch = (id: string, patch: ItemPatch) => {
-    patchItem(id, patch);
+  const railPatch = async (id: string, patch: ItemPatch) => {
+    await patchItem(id, patch);
+    // Ticking a todo carries its sub-todos with it server-side; re-read so they show it.
+    if (patch.done !== undefined) await reload();
     setMapKey((n) => n + 1);
   };
 
@@ -179,8 +191,12 @@ export default function ProjectWorkspace({ initial }: { initial: Block }) {
     return dragOrder.map((id) => byId.get(id)!).filter(Boolean);
   };
 
-  const milestones = inDragOrder(project.items.filter((i) => i.milestone));
-  const rest = inDragOrder(project.items.filter((i) => !i.milestone));
+  /* Only top-level todos are sectioned and sorted; sub-todos ride along under their parent. */
+  const roots = project.items.filter((i) => !i.parentId);
+  const childrenOf = (id: string) => project.items.filter((i) => i.parentId === id);
+
+  const milestones = inDragOrder(roots.filter((i) => i.milestone));
+  const rest = inDragOrder(roots.filter((i) => !i.milestone));
 
   function startRailDrag(e: React.PointerEvent) {
     if (e.button !== 0) return;
@@ -227,6 +243,63 @@ export default function ProjectWorkspace({ initial }: { initial: Block }) {
     () => (preview ? renderMarkdown(project.content) : ""),
     [preview, project.content]
   );
+
+  /** A top-level todo, its sub-todos, and the draft row when one is being added. */
+  function branch(item: Item, section: Item[]) {
+    const kids = childrenOf(item.id);
+    return (
+      <li key={item.id} className="branch">
+        <ul className="todo-list">
+          <TodoRow
+            item={item}
+            accent={accent}
+            onPatch={railPatch}
+            onRemove={railRemove}
+            onMenu={todoMenu}
+            onDragStart={(e) => startRowDrag(e, item.id, section)}
+            dragging={dragId === item.id}
+          />
+
+          {kids.map((kid) => (
+            <TodoRow
+              key={kid.id}
+              item={kid}
+              accent={accent}
+              child
+              onPatch={railPatch}
+              onRemove={railRemove}
+              onMenu={todoMenu}
+              onDragStart={(e) => startRowDrag(e, kid.id, kids)}
+              dragging={dragId === kid.id}
+            />
+          ))}
+
+          {addingUnder === item.id ? (
+            <li className="todo todo-child">
+              <input className="todo-check" type="checkbox" disabled />
+              <input
+                className="todo-text"
+                autoFocus
+                placeholder="Sub-todo…"
+                onKeyDown={(e) => {
+                  const input = e.target as HTMLInputElement;
+                  if (e.key === "Enter" && input.value.trim()) {
+                    addItem(input.value.trim(), { parentId: item.id });
+                    input.value = "";
+                  }
+                  if (e.key === "Escape") setAddingUnder(null);
+                }}
+                onBlur={(e) => {
+                  if (e.target.value.trim()) addItem(e.target.value.trim(), { parentId: item.id });
+                  setAddingUnder(null);
+                }}
+              />
+            </li>
+          ) : null}
+        </ul>
+      </li>
+    );
+  }
 
   return (
     <main className="page">
@@ -299,37 +372,13 @@ export default function ProjectWorkspace({ initial }: { initial: Block }) {
               <>
                 <div className="rail-section">Milestones</div>
                 <ul className="todo-list">
-                  {milestones.map((item) => (
-                    <TodoRow
-                      key={item.id}
-                      item={item}
-                      accent={accent}
-                      onPatch={railPatch}
-                      onRemove={railRemove}
-                      onMenu={todoMenu}
-                      onDragStart={(e) => startRowDrag(e, item.id, milestones)}
-                      dragging={dragId === item.id}
-                    />
-                  ))}
+                  {milestones.map((item) => branch(item, milestones))}
                 </ul>
                 {rest.length > 0 ? <div className="rail-section">Todos</div> : null}
               </>
             ) : null}
 
-            <ul className="todo-list">
-              {rest.map((item) => (
-                <TodoRow
-                  key={item.id}
-                  item={item}
-                  accent={accent}
-                  onPatch={railPatch}
-                  onRemove={railRemove}
-                  onMenu={todoMenu}
-                  onDragStart={(e) => startRowDrag(e, item.id, rest)}
-                  dragging={dragId === item.id}
-                />
-              ))}
-            </ul>
+            <ul className="todo-list">{rest.map((item) => branch(item, rest))}</ul>
 
             <AddTodo onAdd={addItem} />
           </div>
@@ -401,6 +450,7 @@ function TodoRow({
   item,
   accent,
   dragging,
+  child,
   onPatch,
   onRemove,
   onMenu,
@@ -409,6 +459,8 @@ function TodoRow({
   item: Item;
   accent?: string;
   dragging?: boolean;
+  /** Sub-todos are indented and keep the milestone star to their parent. */
+  child?: boolean;
   onPatch: (id: string, patch: ItemPatch) => void;
   onRemove: (id: string) => void;
   onMenu: (e: React.MouseEvent, item: Item) => void;
@@ -416,7 +468,7 @@ function TodoRow({
 }) {
   return (
     <li
-      className="todo todo-draggable"
+      className={child ? "todo todo-draggable todo-child" : "todo todo-draggable"}
       data-id={item.id}
       data-done={item.done ? "true" : undefined}
       data-milestone={item.milestone ? "true" : undefined}
@@ -449,13 +501,15 @@ function TodoRow({
           ↗
         </span>
       ) : null}
-      <button
-        className="milestone-star"
-        title={item.milestone ? "Remove as milestone" : "Mark as milestone"}
-        onClick={() => onPatch(item.id, { milestone: !item.milestone })}
-      >
-        {item.milestone ? "★" : "☆"}
-      </button>
+      {child ? null : (
+        <button
+          className="milestone-star"
+          title={item.milestone ? "Remove as milestone" : "Mark as milestone"}
+          onClick={() => onPatch(item.id, { milestone: !item.milestone })}
+        >
+          {item.milestone ? "★" : "☆"}
+        </button>
+      )}
       <button className="todo-del" title="Delete" onClick={() => onRemove(item.id)}>
         ×
       </button>

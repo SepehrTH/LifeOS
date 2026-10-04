@@ -47,7 +47,7 @@ export function useProject(initial: Block) {
   );
 
   const addItem = useCallback(
-    async (text: string, flags: ItemPatch = {}) => {
+    async (text: string, flags: ItemPatch & { parentId?: string } = {}) => {
       const res = await fetch(`/api/blocks/${initial.id}/items`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
